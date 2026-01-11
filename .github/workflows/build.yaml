@@ -159,13 +159,12 @@ jobs:
             "dev-$(git rev-parse --short HEAD)" 
           }
           
-          @"
-aplTeX Windows Distribution
-Version: $version
-Build Date: $(Get-Date -Format 'yyyy-MM-dd')
-Git Commit: $(git rev-parse HEAD)
-Platform: Windows x86_64
-"@ | Out-File -FilePath "$distDir/VERSION.txt" -Encoding UTF8
+          @"aplTeX Windows Distribution
+            Version: $version
+            Build Date: $(Get-Date -Format 'yyyy-MM-dd')
+            Git Commit: $(git rev-parse HEAD)
+            Platform: Windows x86_64
+          "@ | Out-File -FilePath "$distDir/VERSION.txt" -Encoding UTF8
 
       - name: Create ZIP archive
         shell: pwsh
