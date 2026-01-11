@@ -37,8 +37,8 @@ jobs:
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-harfbuzz
             mingw-w64-x86_64-lua
-            mingw-w64-x86_64-freetype  # 添加 freetype 依赖
-            mingw-w64-x86_64-graphite2 # 添加 graphite2 依赖
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-graphite2
 
       - name: Build aplTeX
         shell: msys2 {0}
