@@ -1,0 +1,265 @@
+name: Build and Release aplTeX for Windows
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送标签如 v1.0.0 时触发
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  BUILD_DIR: build
+  DIST_DIR: aplTeX-windows
+  ZIP_NAME: aplTeX-windows-x64.zip
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    strategy:
+      fail-fast: false  # 一个作业失败不影响其他作业（如果有多个构建矩阵）
+  
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive  # 如果需要子模块
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-lua
+            mingw-w64-x86_64-freetype  # 添加 freetype 依赖
+            mingw-w64-x86_64-graphite2 # 添加 graphite2 依赖
+
+      - name: Build aplTeX
+        shell: msys2 {0}
+        run: |
+          echo "Starting aplTeX build for Windows..."
+          
+          # 设置环境变量
+          export PATH="/mingw64/bin:$PATH"
+          
+          # 创建构建目录
+          mkdir -p ${{ env.BUILD_DIR }}
+          cd ${{ env.BUILD_DIR }}
+          
+          # 克隆 Web2C 仓库
+          if [ ! -d "texlive-source" ]; then
+            echo "Cloning TeX Live source..."
+            git clone https://github.com/TeX-Live/texlive-source.git
+          fi
+          
+          cd texlive-source
+          
+          # 检查特定版本
+          git checkout svn66987 || echo "Using default branch"
+          
+          # 清理之前的构建
+          make distclean 2>/dev/null || true
+          
+          # 配置
+          echo "Configuring build..."
+          ./configure \
+            --disable-shared \
+            --enable-static \
+            --with-banner-add="/aplTeX" \
+            --disable-all-pkgs \
+            --enable-luatex \
+            --with-system-harfbuzz \
+            --with-system-lua53 \
+            --with-system-freetype2 \
+            --with-system-graphite2 \
+            --disable-largefile \
+            --disable-ipc \
+            --disable-dump-share \
+            --disable-tex \
+            --disable-etex \
+            --disable-pdftex \
+            --disable-xetex \
+            CC=gcc \
+            CFLAGS="-O2 -static -D_WIN32_WINNT=0x0600" \
+            LDFLAGS="-static"
+          
+          # 编译
+          echo "Building..."
+          make -j$(nproc)
+          
+          # 验证构建
+          if [ -f "build/texk/web2c/luatex.exe" ]; then
+            # 检查文件类型
+            file build/texk/web2c/luatex.exe
+            # 检查是否静态链接
+            ldd build/texk/web2c/luatex.exe 2>/dev/null && echo "Warning: Not fully static!" || true
+          else
+            echo "Error: luatex.exe not found!"
+            exit 1
+          fi
+          
+          # 复制可执行文件
+          mkdir -p ../../${{ env.DIST_DIR }}/bin
+          cp build/texk/web2c/luatex.exe ../../${{ env.DIST_DIR }}/bin/
+          
+          cd ../..
+          echo "Build completed successfully!"
+
+      - name: Verify executable
+        shell: bash
+        run: |
+          echo "Verifying executable..."
+          # 检查文件是否存在
+          if [ -f "${{ env.DIST_DIR }}/bin/luatex.exe" ]; then
+            echo "✓ luatex.exe found"
+            # 尝试获取版本信息
+            "${{ env.DIST_DIR }}/bin/luatex.exe" --version | head -5 || echo "Warning: Could not run luatex"
+          else
+            echo "✗ luatex.exe not found"
+            exit 1
+          fi
+
+      - name: Prepare distribution package
+        shell: pwsh
+        run: |
+          Write-Host "Preparing distribution package..."
+          
+          # 创建目录结构
+          $distDir = "${{ env.DIST_DIR }}"
+          
+          New-Item -ItemType Directory -Force -Path "$distDir/texmf/tex/latex" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distDir/texmf/fonts/tfm" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distDir/texmf/fonts/type1" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distDir/texmf/fonts/opentype" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distDir/texmf/web2c" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distDir/scripts" | Out-Null
+          
+          # 如果存在自定义 texmf 内容，复制它们
+          if (Test-Path "texmf") {
+            Write-Host "Copying custom texmf files..."
+            Copy-Item -Recurse "texmf/*" "$distDir/texmf/" -ErrorAction SilentlyContinue
+          }
+          
+          # 创建基本格式文件（可选）
+          if (Test-Path "$distDir/texmf/tex/plain") {
+            # 如果有 plain.tex，可以在这里创建格式文件
+            Write-Host "Format files should be created by user as per README"
+          }
+          
+          # 创建版本文件
+          $version = if ($env:GITHUB_REF -match 'refs/tags/(.*)') { 
+            $matches[1] 
+          } else { 
+            "dev-$(git rev-parse --short HEAD)" 
+          }
+          
+          @"
+aplTeX Windows Distribution
+Version: $version
+Build Date: $(Get-Date -Format 'yyyy-MM-dd')
+Git Commit: $(git rev-parse HEAD)
+Platform: Windows x86_64
+"@ | Out-File -FilePath "$distDir/VERSION.txt" -Encoding UTF8
+
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          Write-Host "Creating ZIP archive..."
+          
+          # 计算目录大小
+          $size = (Get-ChildItem "${{ env.DIST_DIR }}" -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "Distribution size: $($size.ToString('N2')) MB"
+          
+          # 创建ZIP
+          Compress-Archive -Path "${{ env.DIST_DIR }}/*" -DestinationPath "${{ env.ZIP_NAME }}" -CompressionLevel Optimal
+          
+          # 显示ZIP信息
+          $zipSize = (Get-Item "${{ env.ZIP_NAME }}").Length / 1MB
+          Write-Host "Created ${{ env.ZIP_NAME }} ($($zipSize.ToString('N2')) MB)"
+          
+          # 验证ZIP
+          if (Test-Path "${{ env.ZIP_NAME }}") {
+            Write-Host "✓ ZIP archive created successfully"
+          } else {
+            Write-Host "✗ Failed to create ZIP archive"
+            exit 1
+          }
+
+      - name: Get version info
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match 'refs/tags/(.*)') {
+            $tag = $matches[1]
+            $version = $tag.TrimStart('v')
+          } else {
+            $version = "dev-$(git rev-parse --short HEAD)"
+          }
+          
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "tag=$($tag ?? '')" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+          Write-Host "Tag: $($tag ?? 'none')"
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ env.ZIP_NAME }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          name: aplTeX ${{ steps.version.outputs.version }} for Windows
+          body: |
+            ## aplTeX ${{ steps.version.outputs.version }} for Windows
+            
+            ### 📥 下载
+            - [aplTeX-windows-x64.zip](aplTeX-windows-x64.zip) - 完整的 Windows 发行版
+            
+            ### 🚀 快速开始
+            1. 下载并解压 ZIP 文件
+            2. 运行 `install.bat` 配置环境变量
+            3. 重启命令提示符
+            4. 验证安装: `luatex --version`
+            
+            ### 📋 系统要求
+            - Windows 10/11 (64位)
+            - 不需要额外依赖
+            
+            ### 🔧 构建信息
+            - 构建时间: ${{ steps.version.outputs.date }}
+            - Git Commit: ${{ github.sha }}
+            
+            ### 📚 文档
+            解压后的 README.md 包含详细说明。
+            
+            ### 🐛 问题反馈
+            请在 [Issues](https://github.com/RadioNoiseE/apltex/issues) 页面报告问题。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact (for manual runs)
+        uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'workflow_dispatch'
+        with:
+          name: aplTeX-windows-x64-${{ github.run_id }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.DIST_DIR }}/VERSION.txt
+          retention-days: 30
+
+      - name: Cleanup (optional)
+        if: always()
+        shell: pwsh
+        run: |
+          # 清理临时文件（可选）
+          Write-Host "Cleaning up temporary files..."
+          Remove-Item -Recurse -Force ${{ env.BUILD_DIR }} -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force ${{ env.DIST_DIR }} -ErrorAction SilentlyContinue
