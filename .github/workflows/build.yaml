@@ -94,11 +94,11 @@ jobs:
           make -j$(nproc)
           
           # 验证构建
-          if [ -f "build/texk/web2c/luatex.exe" ]; then
+          if [ -f "texk/web2c/luatex.exe" ]; then
             # 检查文件类型
-            file build/texk/web2c/luatex.exe
+            file texk/web2c/luatex.exe
             # 检查是否静态链接
-            ldd build/texk/web2c/luatex.exe 2>/dev/null && echo "Warning: Not fully static!" || true
+            ldd texk/web2c/luatex.exe 2>/dev/null && echo "Warning: Not fully static!" || true
           else
             echo "Error: luatex.exe not found!"
             exit 1
@@ -106,7 +106,7 @@ jobs:
           
           # 复制可执行文件
           mkdir -p ../../${{ env.DIST_DIR }}/bin
-          cp build/texk/web2c/luatex.exe ../../${{ env.DIST_DIR }}/bin/
+          cp texk/web2c/luatex.exe ../../${{ env.DIST_DIR }}/bin/
           
           cd ../..
           echo "Build completed successfully!"
@@ -201,10 +201,14 @@ jobs:
             $version = "dev-$(git rev-parse --short HEAD)"
           }
           
+          $date = Get-Date -Format 'yyyy-MM-dd'
+          
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "tag=$($tag ?? '')" >> $env:GITHUB_OUTPUT
+          echo "date=$date" >> $env:GITHUB_OUTPUT
           Write-Host "Version: $version"
           Write-Host "Tag: $($tag ?? 'none')"
+          Write-Host "Date: $date"
 
       - name: Create Release
         id: create_release
